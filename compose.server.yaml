@@ -1,5 +1,7 @@
 services:
   budget:
+    volumes:
+      - ./dist:/app/dist:ro
     networks:
       default:
       portal:
