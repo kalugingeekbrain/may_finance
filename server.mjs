@@ -38,11 +38,12 @@ export function createApp(databasePath = ':memory:') {
     if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
-      if (req.method === 'GET' && path === '/downloads/together-1.1.apk') {
+      if (req.method === 'GET' && ['/downloads/together-1.1.apk','/downloads/together-1.1.1.apk'].includes(path)) {
+        const filename = path.slice('/downloads/'.length);
         let apk;
-        try { apk = readFileSync(new URL('./dist/together-1.1.apk', import.meta.url)); }
+        try { apk = readFileSync(new URL('./dist/' + filename, import.meta.url)); }
         catch (error) { if (error.code === 'ENOENT') fail(404,'Сборка недоступна'); throw error; }
-        res.writeHead(200, {'Content-Type':'application/vnd.android.package-archive','Content-Disposition':'attachment; filename="together-1.1.apk"'});
+        res.writeHead(200, {'Content-Type':'application/vnd.android.package-archive','Content-Disposition':'attachment; filename="' + filename + '"'});
         res.end(apk);
         return;
       }

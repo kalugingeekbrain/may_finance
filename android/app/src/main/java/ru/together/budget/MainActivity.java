@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.os.Build;
 import android.view.WindowInsets;
+import android.widget.FrameLayout;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -33,18 +34,17 @@ public class MainActivity extends Activity {
             }
         });
         if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
-        setContentView(view);
-        view.setOnApplyWindowInsetsListener((v, insets) -> {
-            if (Build.VERSION.SDK_INT >= 30) {
+        FrameLayout root = new FrameLayout(this);
+        root.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        if (Build.VERSION.SDK_INT >= 30) {
+            root.setOnApplyWindowInsetsListener((v, insets) -> {
                 android.graphics.Insets visible = insets.getInsets(WindowInsets.Type.systemBars()
                     | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
                 v.setPadding(visible.left, visible.top, visible.right, visible.bottom);
                 return WindowInsets.CONSUMED;
-            }
-            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
-                insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            return insets;
-        });
+            });
+        }
+        setContentView(root);
         view.loadUrl("https://appassets.androidplatform.net/assets/index.html");
     }
 }

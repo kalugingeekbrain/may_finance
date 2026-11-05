@@ -1,4 +1,20 @@
 const $ = id => document.getElementById(id);
+function revealFocusedField() {
+  const field = document.activeElement;
+  if (!field?.matches('input, textarea')) return;
+  requestAnimationFrame(() => {
+    if (document.activeElement !== field) return;
+    const bounds = field.getBoundingClientRect();
+    const top = window.visualViewport?.offsetTop || 0;
+    const height = window.visualViewport?.height || window.innerHeight;
+    if (bounds.top < top + 12 || bounds.bottom > top + height - 12) {
+      field.scrollIntoView({block:'center', behavior:'instant'});
+    }
+  });
+}
+document.addEventListener('focusin', revealFocusedField);
+window.addEventListener('resize', revealFocusedField);
+window.visualViewport?.addEventListener('resize', revealFocusedField);
 let token = localStorage.getItem('token') || '';
 let base = localStorage.getItem('server') || (location.hostname === 'appassets.androidplatform.net' ? 'https://budget.158-160-250-19.sslip.io' : '');
 let state;
