@@ -47,6 +47,12 @@ test('Pair membership, private wallets, amounts and idempotency through HTTP', a
     const moved = (await request('state', undefined, a.token)).entries.find(row => row.id === personal.id);
     assert.equal(moved.category,'Без категории');
     assert.equal(moved.amount,321);
+    assert.equal((await request('edit-entry', {...edit,category:'Без категории',amount:0}, a.token)).status,200);
+    assert.equal((await request('state', undefined, a.token)).entries.find(row => row.id === personal.id).amount,0);
+    const category = {wallet:'personal',kind:'expense',name:'Кот'};
+    assert.equal((await request('add-category',category,a.token)).status,200);
+    assert.equal((await request('state',undefined,a.token)).categories.some(row => row.name === 'Кот'),true);
+    assert.equal((await request('state',undefined,b.token)).categories.some(row => row.name === 'Кот'),false);
     assert.equal((await request('delete-entry', {id:personal.id}, a.token)).status,200);
     assert.equal((await request('state', undefined, c.token)).entries.length, 0);
     assert.equal((await request('entries', { ...entry, amount: 0, requestId: 'bad-amount' }, a.token)).status, 400);

@@ -11,7 +11,17 @@ export function createApp(databasePath = ':memory:') {
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT NOT NULL, login TEXT UNIQUE NOT NULL, salt TEXT NOT NULL, password TEXT NOT NULL, pair_id TEXT);
     CREATE TABLE IF NOT EXISTS pairs(id TEXT PRIMARY KEY, code_hash TEXT UNIQUE, expires INTEGER);
     CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), expires INTEGER);
-    CREATE TABLE IF NOT EXISTS entries(id TEXT PRIMARY KEY, author TEXT REFERENCES users(id), pair_id TEXT, owner TEXT, kind TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount>0), category TEXT NOT NULL, date TEXT NOT NULL, note TEXT NOT NULL, request_id TEXT NOT NULL, UNIQUE(author,request_id));`);
+    `);
+  const entriesSchema = 'CREATE TABLE IF NOT EXISTS entries(id TEXT PRIMARY KEY, author TEXT REFERENCES users(id), pair_id TEXT, owner TEXT, kind TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount>0 OR (amount=0 AND kind=\'expense\')), category TEXT NOT NULL, date TEXT NOT NULL, note TEXT NOT NULL, request_id TEXT NOT NULL, UNIQUE(author,request_id))';
+  db.exec(entriesSchema);
+  if (db.prepare("SELECT sql FROM sqlite_master WHERE name='entries'").get().sql.includes('CHECK(amount>0)')) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec('ALTER TABLE entries RENAME TO entries_before_zero');
+      db.exec(entriesSchema);
+      db.exec('INSERT INTO entries SELECT * FROM entries_before_zero ORDER BY rowid; DROP TABLE entries_before_zero; COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
   db.exec('CREATE TABLE IF NOT EXISTS category_names(scope TEXT, kind TEXT, name TEXT, hidden INTEGER NOT NULL, PRIMARY KEY(scope,kind,name))');
   const hash = value => createHash('sha256').update(value).digest('hex');
   const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -38,7 +48,7 @@ export function createApp(databasePath = ':memory:') {
     if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
-      if (req.method === 'GET' && ['/downloads/together-1.1.apk','/downloads/together-1.1.1.apk'].includes(path)) {
+      if (req.method === 'GET' && ['/downloads/together-1.1.apk','/downloads/together-1.1.1.apk','/downloads/together-1.1.2.apk'].includes(path)) {
         const filename = path.slice('/downloads/'.length);
         let apk;
         try { apk = readFileSync(new URL('./dist/' + filename, import.meta.url)); }
@@ -112,6 +122,13 @@ export function createApp(databasePath = ':memory:') {
             db.exec('COMMIT');
           } catch (error) { db.exec('ROLLBACK'); throw error; }
           result = { ok: true };
+        } else if (path === '/api/add-category' && req.method === 'POST') {
+          const {wallet,kind,name} = body;
+          if (!['personal','shared'].includes(wallet) || !['expense','income'].includes(kind) || !text(name,50)) fail(400,'Введите название категории');
+          const scope = wallet === 'personal' ? user.id : user.pair_id;
+          if (!scope) fail(400,'Для общего кошелька сначала создайте пару');
+          db.prepare('INSERT OR REPLACE INTO category_names VALUES (?,?,?,0)').run(scope,kind,name.trim());
+          result = {ok:true};
         } else if (path === '/api/category' && req.method === 'POST') {
           const {wallet, kind, name, replacement} = body;
           if (!['shared','personal'].includes(wallet) || !['expense','income'].includes(kind) || !text(name,50) || (replacement !== null && !text(replacement,50))) fail(400,'Проверьте название категории');
@@ -134,7 +151,7 @@ export function createApp(databasePath = ':memory:') {
         } else if (['/api/entries','/api/edit-entry'].includes(path) && req.method === 'POST') {
           if (!['shared', 'personal'].includes(body.wallet) || !['income', 'expense'].includes(body.kind)) fail(400, 'Выберите кошелёк и тип операции');
           if (body.wallet === 'shared' && !user.pair_id) fail(400, 'Сначала создайте пару или присоединитесь по коду');
-          if (!Number.isSafeInteger(body.amount) || body.amount < 1 || body.amount > 100000000000) fail(400, 'Некорректная сумма');
+          if (!Number.isSafeInteger(body.amount) || body.amount < (body.kind === 'expense' ? 0 : 1) || body.amount > 100000000000) fail(400, 'Некорректная сумма');
           if (!text(body.category, 50) || !text(body.requestId, 100) || typeof body.note !== 'string' || body.note.length > 300) fail(400, 'Проверьте категорию и комментарий');
           if (typeof body.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.date) || !Number.isFinite(Date.parse(body.date)) || new Date(body.date).toISOString().slice(0, 10) !== body.date) fail(400, 'Некорректная дата');
           const shared = body.wallet === 'shared';

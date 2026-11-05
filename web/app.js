@@ -64,6 +64,7 @@ function control(label, callback) {
   return button;
 }
 function clearForm() {
+  closeCategoryForm();
   editingId = null;
   $('entry-form').reset();
   $('date').value = today();
@@ -97,6 +98,7 @@ function renderTab() {
   for (const button of $('tabs').children) button.setAttribute('aria-pressed',String(button.dataset.tab === activeTab));
   if (formTab) {
     $('kind').value = activeTab;
+    $('open-category').textContent = activeTab === 'expense' ? '＋ Добавить категорию расходов' : '＋ Добавить категорию поступлений';
     $('form-title').textContent = editingId ? 'Изменить операцию' : activeTab === 'income' ? 'Новое поступление' : 'Новая трата';
     $('save').textContent = editingId ? 'Сохранить' : 'Добавить';
     $('cancel-edit').hidden = !editingId;
@@ -142,7 +144,29 @@ function renderCategories() {
 }
 for (const button of $('tabs').children) button.onclick = () => switchTab(button.dataset.tab);
 $('cancel-edit').onclick = () => { clearForm(); renderTab(); };
-$('wallet').onchange = renderCategories;
+function closeCategoryForm() {
+  $('category-form').hidden = true;
+  $('new-category').value = '';
+}
+$('wallet').onchange = () => { closeCategoryForm(); renderCategories(); };
+$('open-category').onclick = () => { $('category-form').hidden = false; $('new-category').focus(); };
+$('cancel-category').onclick = closeCategoryForm;
+$('category-form').onsubmit = event => {
+  event.preventDefault();
+  const name = $('new-category').value.trim();
+  const wallet = $('wallet').value;
+  const kind = $('kind').value;
+  action(event.submitter, async () => {
+    await api('add-category',{wallet,kind,name});
+    if (wallet === $('wallet').value && kind === activeTab) {
+      $('category').value = name;
+      requestId = crypto.randomUUID();
+      closeCategoryForm();
+    }
+    await refresh();
+    message('Категория сохранена');
+  });
+};
 function renderReport() {
   if (!state) return;
   const wallet = $('report-wallet').value;
@@ -151,7 +175,7 @@ function renderReport() {
   const expense = entries.filter(entry => entry.kind === 'expense').reduce((sum, entry) => sum + entry.amount, 0);
   $('income').textContent = money(income); $('expense').textContent = money(expense); $('net').textContent = money(income - expense); $('chart-total').textContent = money(expense);
   const categories = new Map();
-  for (const entry of entries.filter(entry => entry.kind === 'expense')) categories.set(entry.category, (categories.get(entry.category) || 0) + entry.amount);
+  for (const entry of entries.filter(entry => entry.kind === 'expense' && entry.amount > 0)) categories.set(entry.category, (categories.get(entry.category) || 0) + entry.amount);
   $('legend').replaceChildren();
   let offset = 0;
   const stops = [];
