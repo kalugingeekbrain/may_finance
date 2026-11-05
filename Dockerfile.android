@@ -1,0 +1,15 @@
+FROM eclipse-temurin:17-jdk-jammy
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip && rm -rf /var/lib/apt/lists/*
+ENV ANDROID_HOME=/opt/android
+ENV PATH=/opt/gradle/gradle-8.11.1/bin:/opt/android/cmdline-tools/latest/bin:$PATH
+RUN mkdir -p /opt/android/cmdline-tools /opt/gradle && \
+    curl -fL https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip -o /tmp/sdk.zip && \
+    unzip -q /tmp/sdk.zip -d /opt/android/cmdline-tools && \
+    mv /opt/android/cmdline-tools/cmdline-tools /opt/android/cmdline-tools/latest && \
+    curl -fL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o /tmp/gradle.zip && \
+    unzip -q /tmp/gradle.zip -d /opt/gradle && \
+    rm /tmp/sdk.zip /tmp/gradle.zip
+RUN yes | sdkmanager --licenses > /dev/null
+RUN sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+WORKDIR /project/android
+CMD ["gradle", "--no-daemon", "assembleDebug"]

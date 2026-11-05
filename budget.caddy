@@ -1,0 +1,5 @@
+
+budget.158-160-250-19.sslip.io {
+    encode gzip
+    reverse_proxy together-budget:8080
+}

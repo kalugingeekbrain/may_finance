@@ -1,0 +1,11 @@
+services:
+  budget:
+    networks:
+      default:
+      portal:
+        aliases:
+          - together-budget
+networks:
+  portal:
+    external: true
+    name: portal_default

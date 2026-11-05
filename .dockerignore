@@ -1,0 +1,5 @@
+data
+android/**/build
+android/.gradle
+.env
+*.tar.gz
