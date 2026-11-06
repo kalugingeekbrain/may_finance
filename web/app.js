@@ -18,6 +18,7 @@ window.visualViewport?.addEventListener('resize', revealFocusedField);
 let token = localStorage.getItem('token') || '';
 let base = localStorage.getItem('server') || (location.hostname === 'appassets.androidplatform.net' ? 'https://budget.158-160-250-19.sslip.io' : '');
 let state;
+let privateVisible = false;
 let activeTab = "expense";
 let editingId = null;
 let requestId = crypto.randomUUID();
@@ -37,7 +38,7 @@ async function api(path, body) {
   }
   return result;
 }
-function signOut() { clearForm(); activeTab = 'expense'; token = ''; state = null; localStorage.removeItem('token'); $('dashboard').hidden = true; $('auth').hidden = false; $('logout').hidden = true; $('entries').replaceChildren(); $('code').textContent = ''; }
+function signOut() { privateVisible = false; clearForm(); activeTab = 'expense'; token = ''; state = null; localStorage.removeItem('token'); $('dashboard').hidden = true; $('auth').hidden = false; $('logout').hidden = true; $('entries').replaceChildren(); $('code').textContent = ''; }
 async function refresh() {
   if (!token) return;
   const currentToken = token;
@@ -49,10 +50,7 @@ async function refresh() {
   $('members').textContent = state.members.map(member => member.name).join(' и ') || 'Создайте пару для общего бюджета';
   $('pair-panel').hidden = state.members.length === 2;
   $('join-form').hidden = state.paired;
-  for (const wallet of ['shared', 'personal']) {
-    const total = state.entries.filter(entry => entry.wallet === wallet).reduce((sum, entry) => sum + (entry.kind === 'income' ? entry.amount : -entry.amount), 0);
-    $(wallet + '-balance').textContent = money(total);
-  }
+  $('shared-balance').textContent = money(walletBalance('shared'));
   $('sync').textContent = 'Обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   renderTab();
 }
@@ -65,6 +63,8 @@ function control(label, callback) {
 }
 function clearForm() {
   closeCategoryForm();
+  $('item-rows').replaceChildren();
+  $('receipt').open = false;
   editingId = null;
   $('entry-form').reset();
   $('date').value = today();
@@ -81,15 +81,32 @@ function editEntry(entry) {
   switchTab(entry.kind);
   editingId = entry.id;
   for (const field of ['wallet','category','note','date']) $(field).value = entry[field];
+  $('item-rows').replaceChildren();
+  for (const item of entry.items || []) addItem(item);
+  $('receipt').open = Boolean(entry.items?.length);
   $('amount').value = (entry.amount / 100).toFixed(2);
   renderTab();
   $('operation').scrollIntoView({block:'start'});
+}
+function walletBalance(wallet) {
+  return state.entries.filter(entry => entry.wallet === wallet)
+    .reduce((sum, entry) => sum + (entry.kind === 'income' ? entry.amount : -entry.amount), 0);
 }
 function renderTab() {
   if (!state) return;
   const formTab = ['expense','income'].includes(activeTab);
   $('operation').hidden = !formTab;
-  $('report').hidden = $('history').hidden = activeTab !== 'report';
+  const personalTab = activeTab === 'personal';
+  $('report').hidden = $('history').hidden = !(activeTab === 'report' || (personalTab && privateVisible));
+  $('report-wallet').hidden = personalTab;
+  $('plans').hidden = activeTab !== 'plans';
+  $('receipt').hidden = activeTab !== 'expense';
+  $('personal-balance').textContent = privateVisible ? money(walletBalance('personal')) : '••••';
+  for (const option of $('report-wallet').options) option.disabled = !privateVisible && option.value !== 'shared';
+  if (!privateVisible) $('report-wallet').value = 'shared';
+  $('eye').setAttribute('aria-label',privateVisible ? 'Скрыть личные данные' : 'Показать личные данные');
+  $('eye').setAttribute('aria-pressed',String(privateVisible));
+  renderGoals();
   $('pair-panel').hidden = activeTab !== 'pair';
   $('invite').hidden = state.members.length === 2;
   $('pair-panel').querySelector('h2').textContent = state.members.length === 2 ? 'Ваша пара' : 'Пригласите партнёра';
@@ -167,29 +184,136 @@ $('category-form').onsubmit = event => {
     message('Категория сохранена');
   });
 };
+function cents(value) {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) throw new Error('Введите стоимость в рублях и копейках');
+  const [whole, fraction = ''] = normalized.split('.');
+  return Number(whole) * 100 + Number(fraction.padEnd(2,'0'));
+}
+function setMonthRange() {
+  const month = $('month').value || today().slice(0,7);
+  const [year, number] = month.split('-').map(Number);
+  $('from').value = month + '-01';
+  $('to').value = month + '-' + new Date(year,number,0).getDate();
+  renderReport();
+}
+function addItem(item) {
+  const row = document.createElement('div');
+  row.className = 'form-grid';
+  const name = document.createElement('input');
+  name.name = 'itemName'; name.placeholder = 'Наименование'; name.required = true; name.maxLength = 80;
+  const price = document.createElement('input');
+  price.name = 'itemPrice'; price.placeholder = 'Цена, ₽'; price.inputMode = 'decimal'; price.required = true;
+  name.setAttribute('aria-label','Наименование покупки');
+  price.setAttribute('aria-label','Стоимость покупки');
+  if (item) { name.value = item.name; price.value = (item.price / 100).toFixed(2); }
+  row.append(name,price,control('Убрать',() => { row.remove(); requestId = crypto.randomUUID(); }));
+  $('item-rows').append(row);
+}
+$('add-item').onclick = () => addItem();
+$('eye').onclick = () => {
+  privateVisible = !privateVisible;
+  if (!privateVisible) {
+    if ($('wallet').value === 'personal') clearForm();
+    $('report-wallet').value = 'shared';
+  }
+  renderTab();
+};
+function renderGoals() {
+  const goals = (state.goals || []).filter(goal => goal.wallet === 'shared' || privateVisible);
+  const key = JSON.stringify([today(),goals]);
+  if ($('goal-list').dataset.key === key) return;
+  $('goal-list').dataset.key = key;
+  $('goal-list').replaceChildren();
+  for (const goal of goals) {
+    const card = document.createElement('article');
+    const title = document.createElement('h3');
+    title.textContent = goal.title;
+    const progress = document.createElement('p');
+    progress.textContent = (goal.wallet === 'shared' ? 'Общий' : 'Личный') + ' · накоплено ' + money(goal.saved) + ' из ' + money(goal.target);
+    const remaining = Math.max(0,goal.target - goal.saved);
+    const schedule = document.createElement('p');
+    schedule.textContent = remaining ? 'Осталось ' + money(remaining) : 'Цель достигнута';
+    if (goal.deadline && remaining) {
+      const days = 1 + Math.round((Date.parse(goal.deadline) - Date.parse(today())) / 86400000);
+      schedule.textContent += days > 0 ? ' · до ' + goal.deadline + ' включительно по ' + money(Math.ceil(remaining / days)) + ' в день' : ' · дата покупки прошла (' + goal.deadline + ')';
+    }
+    card.append(title,progress,schedule);
+    if (remaining) {
+      const form = document.createElement('form');
+      const amount = document.createElement('input');
+      amount.placeholder = 'Отложено, ₽'; amount.required = true; amount.inputMode = 'decimal';
+      amount.setAttribute('aria-label','Сумма взноса');
+      const button = document.createElement('button');
+      button.textContent = 'Записать взнос';
+      let id = crypto.randomUUID();
+      amount.oninput = () => { id = crypto.randomUUID(); };
+      form.onsubmit = event => { event.preventDefault(); action(button,async () => {
+        await api('deposit',{id, goal:goal.id, amount:cents(amount.value)});
+        amount.value = ''; id = crypto.randomUUID(); await refresh();
+      }); };
+      form.append(amount,button); card.append(form);
+    }
+    $('goal-list').append(card);
+  }
+}
+$('goal-kind').onchange = () => {
+  const purchase = $('goal-kind').value === 'purchase';
+  $('deadline-label').hidden = !purchase;
+  $('goal-date').required = purchase;
+};
+let goalId = crypto.randomUUID();
+$('goal-form').oninput = () => { goalId = crypto.randomUUID(); };
+$('goal-form').onsubmit = event => {
+  event.preventDefault();
+  action(event.submitter,async () => {
+    await api('goal',{id:goalId,wallet:$('goal-wallet').value,title:$('goal-name').value,target:cents($('goal-target').value),deadline:$('goal-kind').value === 'purchase' ? $('goal-date').value : null});
+    goalId = crypto.randomUUID(); $('goal-form').reset(); $('goal-kind').onchange();
+    await refresh(); message('Цель сохранена');
+  });
+};
 function renderReport() {
   if (!state) return;
-  const wallet = $('report-wallet').value;
-  const entries = state.entries.filter(entry => entry.date.startsWith($('month').value) && (wallet === 'all' || entry.wallet === wallet));
+  const wallet = activeTab === 'personal' ? 'personal' : $('report-wallet').value;
+  const entries = state.entries.filter(entry => entry.date >= $('from').value && entry.date <= $('to').value && (privateVisible || entry.wallet === 'shared') && (wallet === 'all' || entry.wallet === wallet));
   const income = entries.filter(entry => entry.kind === 'income').reduce((sum, entry) => sum + entry.amount, 0);
   const expense = entries.filter(entry => entry.kind === 'expense').reduce((sum, entry) => sum + entry.amount, 0);
   $('income').textContent = money(income); $('expense').textContent = money(expense); $('net').textContent = money(income - expense); $('chart-total').textContent = money(expense);
+  const chartKind = $('chart-kind').value;
+  const total = chartKind === 'income' ? income : expense;
+  $('chart-label').textContent = chartKind === 'income' ? 'Поступления' : 'Расходы';
+  $('chart-total').textContent = money(total);
   const categories = new Map();
-  for (const entry of entries.filter(entry => entry.kind === 'expense' && entry.amount > 0)) categories.set(entry.category, (categories.get(entry.category) || 0) + entry.amount);
+  for (const entry of entries.filter(entry => entry.kind === chartKind && entry.amount > 0)) categories.set(entry.category, (categories.get(entry.category) || 0) + entry.amount);
   $('legend').replaceChildren();
   let offset = 0;
   const stops = [];
   [...categories].sort((a, b) => b[1] - a[1]).forEach(([category, amount], index) => {
-    const percent = amount / expense * 100;
+    const percent = amount / total * 100;
     const color = colors[index % colors.length];
     stops.push(`${color} ${offset}% ${offset + percent}%`); offset += percent;
     const item = document.createElement('li'); const dot = document.createElement('i'); dot.style.background = color;
     const label = document.createElement('span'); label.append(categoryIcon(category), ' ' + category + ' · ' + money(amount));
+    if (chartKind === 'expense') {
+      const goods = entries.filter(e => e.kind === 'expense' && e.category === category).flatMap(e => e.items || []);
+      if (goods.length) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Покупки (' + goods.length + ')';
+        details.append(summary);
+        for (const good of goods) {
+          const line = document.createElement('div');
+          line.textContent = good.name + ' · ' + money(good.price);
+          details.append(line);
+        }
+        label.append(details);
+      }
+    }
     const share = document.createElement('b'); share.textContent = percent.toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + '%';
     item.append(dot, label, share); $('legend').append(item);
   });
   $('chart').style.background = stops.length ? `conic-gradient(${stops.join(',')})` : '#edf0e8';
-  if (!stops.length) $('legend').textContent = 'В этом месяце расходов пока нет.';
+  if (!stops.length) $('legend').textContent = 'За выбранный период данных нет.';
   $('entries').replaceChildren();
   for (const entry of entries) {
     const item = document.createElement('li'); const detail = document.createElement('div'); const title = document.createElement('span');
@@ -219,6 +343,7 @@ $('auth-form').addEventListener('submit', event => {
     if (!address && location.hostname === 'appassets.androidplatform.net') throw new Error('Укажите адрес сервера');
     base = address; localStorage.setItem('server', base);
     const result = await api(button.value, { login: $('login').value, password: $('password').value, name: $('name').value });
+    window.TogetherAutofill?.commit();
     token = result.token; localStorage.setItem('token', token); $('password').value = ''; await refresh();
   });
 });
@@ -231,14 +356,23 @@ $('entry-form').onsubmit = event => {
     if (!/^\d+(\.\d{1,2})?$/.test(raw)) throw new Error('Введите сумму с точностью до копеек');
     const [whole, fraction = ''] = raw.split('.');
     const amount = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
-    await api(editingId ? 'edit-entry' : 'entries', { id:editingId, wallet: $('wallet').value, kind: $('kind').value, amount, category: $('category').value, date: $('date').value, note: $('note').value, requestId });
+    const items = $('kind').value === 'expense' ? Array.from($('item-rows').children, row => ({
+      name: row.querySelector('[name=itemName]').value.trim(), price: cents(row.querySelector('[name=itemPrice]').value)
+    })) : [];
+    await api(editingId ? 'edit-entry' : 'entries', { items, id:editingId, wallet: $('wallet').value, kind: $('kind').value, amount, category: $('category').value, date: $('date').value, note: $('note').value, requestId });
     clearForm();
     await refresh(); message('Операция сохранена');
   });
 };
 $('entry-form').addEventListener('input', () => { requestId = crypto.randomUUID(); });
 $('logout').onclick = () => action($('logout'), async () => { await api('logout', {}); signOut(); });
-$('month').onchange = renderReport; $('report-wallet').onchange = renderReport;
+$('month').onchange = setMonthRange;
+setMonthRange();
+for (const id of ['chart-kind','from','to','report-wallet']) $(id).onchange = () => {
+  if ($('from').value > $('to').value) message('Начало периода должно быть раньше окончания');
+  else message('');
+  renderReport();
+};
 refresh().catch(error => message(error.message));
 setInterval(() => { if (token && !document.hidden) refresh().catch(() => { $('sync').textContent = 'Нет связи · данные могут устареть'; }); }, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh().catch(error => message(error.message)); });

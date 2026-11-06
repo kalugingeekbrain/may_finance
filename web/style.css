@@ -6,3 +6,7 @@
 #manage > div { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
 summary { cursor:pointer; margin-top:16px; }
 input { scroll-margin-block:28px; }
+#open-category { margin-top:1mm; }
+#goal-list article { border-top:1px solid #dce2d9; padding:12px 0; }
+#eye { padding:3px 8px; }
+

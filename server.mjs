@@ -23,6 +23,11 @@ export function createApp(databasePath = ':memory:') {
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
   db.exec('CREATE TABLE IF NOT EXISTS category_names(scope TEXT, kind TEXT, name TEXT, hidden INTEGER NOT NULL, PRIMARY KEY(scope,kind,name))');
+  if (!db.prepare("PRAGMA table_info(entries)").all().some(column => column.name === 'items')) {
+    db.exec("ALTER TABLE entries ADD COLUMN items TEXT NOT NULL DEFAULT '[]'");
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS goals(id TEXT PRIMARY KEY, scope TEXT NOT NULL, wallet TEXT NOT NULL, title TEXT NOT NULL, target INTEGER NOT NULL, deadline TEXT);
+    CREATE TABLE IF NOT EXISTS deposits(id TEXT PRIMARY KEY, goal TEXT REFERENCES goals(id), amount INTEGER NOT NULL);`);
   const hash = value => createHash('sha256').update(value).digest('hex');
   const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
   const text = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= max;
@@ -35,7 +40,7 @@ export function createApp(databasePath = ':memory:') {
     attempts.set(key, item);
     if (item.count > 30) fail(429, 'Слишком много попыток. Попробуйте через 15 минут.');
   }
-  const visibleEntries = user => db.prepare('SELECT id,author,kind,amount,category,date,note, CASE WHEN owner IS NULL THEN \'shared\' ELSE \'personal\' END AS wallet FROM entries WHERE owner=? OR (owner IS NULL AND pair_id=?) ORDER BY date DESC,rowid DESC').all(user.id, user.pair_id);
+  const visibleEntries = user => db.prepare('SELECT id,author,kind,amount,category,date,note,items, CASE WHEN owner IS NULL THEN \'shared\' ELSE \'personal\' END AS wallet FROM entries WHERE owner=? OR (owner IS NULL AND pair_id=?) ORDER BY date DESC,rowid DESC').all(user.id, user.pair_id);
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -48,7 +53,7 @@ export function createApp(databasePath = ':memory:') {
     if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
-      if (req.method === 'GET' && ['/downloads/together-1.1.apk','/downloads/together-1.1.1.apk','/downloads/together-1.1.2.apk'].includes(path)) {
+      if (req.method === 'GET' && ['/downloads/together-1.1.apk','/downloads/together-1.1.1.apk','/downloads/together-1.1.2.apk','/downloads/together-1.2.apk'].includes(path)) {
         const filename = path.slice('/downloads/'.length);
         let apk;
         try { apk = readFileSync(new URL('./dist/' + filename, import.meta.url)); }
@@ -97,7 +102,7 @@ export function createApp(databasePath = ':memory:') {
         if (path === '/api/state' && req.method === 'GET') {
           const members = user.pair_id ? db.prepare('SELECT id,name FROM users WHERE pair_id=?').all(user.pair_id) : [];
           const categories = db.prepare("SELECT kind,name,hidden,CASE WHEN scope=? THEN 'personal' ELSE 'shared' END AS wallet FROM category_names WHERE scope IN (?,?)").all(user.id,user.id,user.pair_id);
-          result = { user: { id: user.id, name: user.name }, paired: !!user.pair_id, members, entries: visibleEntries(user), categories };
+          result = { user: { id: user.id, name: user.name }, paired: !!user.pair_id, members, entries: visibleEntries(user).map(row => ({...row,items:JSON.parse(row.items)})), categories, goals: db.prepare('SELECT g.*, COALESCE(SUM(d.amount),0) saved FROM goals g LEFT JOIN deposits d ON d.goal=g.id WHERE g.scope IN (?,?) GROUP BY g.id ORDER BY g.rowid DESC').all(user.id,user.pair_id) };
         } else if (path === '/api/invite' && req.method === 'POST') {
           if (user.pair_id && db.prepare('SELECT COUNT(*) AS n FROM users WHERE pair_id=?').get(user.pair_id).n >= 2) fail(409, 'В паре уже два человека');
           const code = randomBytes(8).toString('hex').toUpperCase();
@@ -122,6 +127,19 @@ export function createApp(databasePath = ':memory:') {
             db.exec('COMMIT');
           } catch (error) { db.exec('ROLLBACK'); throw error; }
           result = { ok: true };
+        } else if (path === '/api/goal' && req.method === 'POST') {
+          const {id,wallet,title,target,deadline} = body;
+          const scope = wallet === 'personal' ? user.id : user.pair_id;
+          if (!scope || !['shared','personal'].includes(wallet) || !text(id,100) || !text(title,80) || !Number.isSafeInteger(target) || target < 1 || target > 100000000000) fail(400,'Проверьте кошелёк, название и сумму');
+          if (deadline !== null && (typeof deadline !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(deadline) || !Number.isFinite(Date.parse(deadline)) || new Date(deadline).toISOString().slice(0,10) !== deadline)) fail(400,'Проверьте дату покупки');
+          db.prepare('INSERT INTO goals VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING').run(id,scope,wallet,title.trim(),target,deadline);
+          result = {ok:true};
+        } else if (path === '/api/deposit' && req.method === 'POST') {
+          const {id,goal,amount} = body;
+          if (!text(id,100) || !text(goal,100) || !Number.isSafeInteger(amount) || amount < 1 || amount > 100000000000) fail(400,'Проверьте сумму');
+          if (!db.prepare('SELECT id FROM goals WHERE id=? AND scope IN (?,?)').get(goal,user.id,user.pair_id)) fail(404,'Цель недоступна');
+          db.prepare('INSERT INTO deposits VALUES (?,?,?) ON CONFLICT(id) DO NOTHING').run(id,goal,amount);
+          result = {ok:true};
         } else if (path === '/api/add-category' && req.method === 'POST') {
           const {wallet,kind,name} = body;
           if (!['personal','shared'].includes(wallet) || !['expense','income'].includes(kind) || !text(name,50)) fail(400,'Введите название категории');
@@ -157,11 +175,13 @@ export function createApp(databasePath = ':memory:') {
           const shared = body.wallet === 'shared';
           const category = body.category.trim();
           if (db.prepare('SELECT hidden FROM category_names WHERE scope=? AND kind=? AND name=?').get(shared ? user.pair_id : user.id,body.kind,category)?.hidden) fail(409,'Категория удалена или переименована');
+          const items = body.items;
+          if (items !== undefined && (!Array.isArray(items) || items.length > 60 || (items.length && body.kind !== 'expense') || items.some(item => !item || !text(item.name,80) || !Number.isSafeInteger(item.price) || item.price < 0 || item.price > 100000000000))) fail(400,'Проверьте список покупок');
           const values = [shared ? user.pair_id : null, shared ? null : user.id, body.kind, body.amount, category, body.date, body.note.trim()];
           if (path === '/api/edit-entry') {
-            if (!text(body.id,100) || !db.prepare('UPDATE entries SET pair_id=?,owner=?,kind=?,amount=?,category=?,date=?,note=? WHERE id=? AND author=?').run(...values,body.id,user.id).changes) fail(404,'Операция недоступна');
+            if (!text(body.id,100) || !db.prepare('UPDATE entries SET pair_id=?,owner=?,kind=?,amount=?,category=?,date=?,note=?,items=COALESCE(?,items) WHERE id=? AND author=?').run(...values,items === undefined ? null : JSON.stringify(items),body.id,user.id).changes) fail(404,'Операция недоступна');
           } else {
-            db.prepare('INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(author,request_id) DO NOTHING').run(randomUUID(),user.id,...values,body.requestId);
+            db.prepare('INSERT INTO entries(id,author,pair_id,owner,kind,amount,category,date,note,request_id,items) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(author,request_id) DO NOTHING').run(randomUUID(),user.id,...values,body.requestId,JSON.stringify(items || []));
           }
           result = { ok: true };
         } else if (path === '/api/logout' && req.method === 'POST') {

@@ -19,6 +19,16 @@ public class MainActivity extends Activity {
         view.setWebChromeClient(new android.webkit.WebChromeClient());
         view.getSettings().setJavaScriptEnabled(true);
         view.getSettings().setDomStorageEnabled(true);
+        view.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_YES);
+        view.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void commit() {
+                runOnUiThread(() -> {
+                    android.view.autofill.AutofillManager manager = getSystemService(android.view.autofill.AutofillManager.class);
+                    if (manager != null && manager.isEnabled()) manager.commit();
+                });
+            }
+        }, "TogetherAutofill");
         view.getSettings().setAllowFileAccess(false);
         view.getSettings().setAllowContentAccess(false);
         WebViewAssetLoader assets = new WebViewAssetLoader.Builder()
